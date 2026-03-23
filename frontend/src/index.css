@@ -132,6 +132,34 @@ button {
   font-weight: 600;
 }
 
+.role-nav {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+}
+
+.role-link {
+  display: inline-flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid #9ab5d1;
+  text-decoration: none;
+  background: #edf5fc;
+  color: #22486f;
+  font-weight: 700;
+}
+
+.role-link.active {
+  border-color: #c9662c;
+  background: linear-gradient(135deg, #f0884b 0%, var(--accent) 100%);
+  color: #ffffff;
+}
+
 .toolbar {
   margin-top: 14px;
   display: grid;

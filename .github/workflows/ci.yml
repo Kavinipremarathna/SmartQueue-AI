@@ -27,6 +27,36 @@ jobs:
       - name: Test backend
         run: dotnet test tests/SmartQueueAPI.Tests/SmartQueueAPI.Tests.csproj --configuration Release --no-build
 
+      - name: Backend auth and queue smoke test
+        run: |
+          dotnet run --urls http://localhost:5055 > backend.log 2>&1 &
+          TOKEN=""
+          for i in {1..20}; do
+            LOGIN_RESPONSE=$(curl -sS -X POST http://localhost:5055/api/auth/login \
+              -H "Content-Type: application/json" \
+              -d '{"username":"admin","password":"admin123"}' || true)
+
+            if [ -n "$LOGIN_RESPONSE" ]; then
+              TOKEN=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('token',''))" "$LOGIN_RESPONSE" 2>/dev/null || true)
+            fi
+
+            if [ -n "$TOKEN" ]; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [ -z "$TOKEN" ]; then
+            echo "Login token was not acquired"
+            cat backend.log
+            exit 1
+          fi
+
+          curl -fsS http://localhost:5055/api/queue/current \
+            -H "Authorization: Bearer $TOKEN"
+
+          pkill -f "dotnet run" || true
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:

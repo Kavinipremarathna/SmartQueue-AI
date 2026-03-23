@@ -1,61 +1,94 @@
 import { useEffect, useMemo, useState } from "react";
-
-const API_BASE = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5055";
+import * as signalR from "@microsoft/signalr";
+import { NavLink, Navigate, Route, Routes } from "react-router-dom";
+import { API_BASE, authHeaders, fetchJson } from "./api/client";
+import LoginView from "./components/LoginView";
+import CustomerDashboard from "./views/CustomerDashboard";
+import StaffLiveQueue from "./views/StaffLiveQueue";
+import AdminAnalyticsPanel from "./views/AdminAnalyticsPanel";
 
 function App() {
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("admin123");
+  const [token, setToken] = useState("");
+  const [role, setRole] = useState("");
   const [name, setName] = useState("");
   const [priority, setPriority] = useState(1);
+  const [staffCount, setStaffCount] = useState(2);
+  const [slotStartUtc, setSlotStartUtc] = useState("");
   const [tickets, setTickets] = useState([]);
+  const [queueState, setQueueState] = useState(null);
   const [summary, setSummary] = useState(null);
-  const [search, setSearch] = useState("");
-  const [autoRefresh, setAutoRefresh] = useState(true);
-  const [loading, setLoading] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [servingNext, setServingNext] = useState(false);
+  const [analytics, setAnalytics] = useState(null);
+  const [appointments, setAppointments] = useState([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  const waitingTickets = useMemo(() => {
-    return tickets.filter((ticket) => ticket.status === "Waiting");
-  }, [tickets]);
+  const waitingTickets = useMemo(
+    () => tickets.filter((ticket) => ticket.status === "Waiting"),
+    [tickets],
+  );
 
-  const historyTickets = useMemo(() => {
-    return tickets.filter((ticket) => ticket.status !== "Waiting");
-  }, [tickets]);
+  const canManageQueue = role === "Admin" || role === "Staff";
+  const isAdmin = role === "Admin";
 
-  const filteredWaiting = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    if (!term) {
-      return waitingTickets;
+  async function login(event) {
+    event.preventDefault();
+    setError("");
+
+    try {
+      const response = await fetchJson(`${API_BASE}/api/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username, password }),
+      });
+
+      setToken(response.token);
+      setRole(response.role);
+      setName("");
+    } catch (loginError) {
+      setError(loginError.message);
     }
-
-    return waitingTickets.filter((ticket) =>
-      ticket.customerName.toLowerCase().includes(term),
-    );
-  }, [waitingTickets, search]);
-
-  async function fetchJson(url, options) {
-    const response = await fetch(url, options);
-    if (!response.ok) {
-      throw new Error(`Request failed (${response.status})`);
-    }
-
-    if (response.status === 204) {
-      return null;
-    }
-
-    return await response.json();
   }
 
   async function loadDashboard() {
+    if (!token) {
+      return;
+    }
+
     setLoading(true);
     setError("");
     try {
-      const [allTickets, queueSummary] = await Promise.all([
-        fetchJson(`${API_BASE}/api/queue/all`),
-        fetchJson(`${API_BASE}/api/queue/summary`),
-      ]);
-      setTickets(Array.isArray(allTickets) ? allTickets : []);
-      setSummary(queueSummary);
+      const queue = await fetchJson(`${API_BASE}/api/queue/current`, {
+        headers: authHeaders(token),
+      });
+      setQueueState(queue);
+
+      const requests = [
+        fetchJson(`${API_BASE}/api/tickets`, {
+          headers: authHeaders(token),
+        }),
+      ];
+
+      if (canManageQueue) {
+        requests.push(
+          fetchJson(`${API_BASE}/api/queue/summary`, {
+            headers: authHeaders(token),
+          }),
+          fetchJson(`${API_BASE}/api/analytics`, {
+            headers: authHeaders(token),
+          }),
+          fetchJson(`${API_BASE}/api/appointments`, {
+            headers: authHeaders(token),
+          }),
+        );
+      }
+
+      const results = await Promise.all(requests);
+      setTickets(results[0] ?? []);
+      setSummary(results[1] ?? null);
+      setAnalytics(results[2] ?? null);
+      setAppointments(results[3] ?? []);
     } catch (fetchError) {
       setError(fetchError.message);
     } finally {
@@ -63,59 +96,44 @@ function App() {
     }
   }
 
-  async function handleSubmit(event) {
+  async function createTicket(event) {
     event.preventDefault();
     setError("");
 
-    if (!name.trim()) {
-      setError("Customer name is required.");
-      return;
-    }
-
-    setSubmitting(true);
     try {
-      const params = new URLSearchParams({
-        name: name.trim(),
-        priority: String(priority),
-      });
-
-      const response = await fetch(`${API_BASE}/api/queue/add?${params}`, {
+      await fetchJson(`${API_BASE}/api/tickets`, {
         method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ customerName: name, priority }),
       });
-
-      if (!response.ok) {
-        throw new Error(`Add ticket failed (${response.status})`);
-      }
-
       setName("");
       setPriority(1);
       await loadDashboard();
-    } catch (submitError) {
-      setError(submitError.message);
-    } finally {
-      setSubmitting(false);
+    } catch (createError) {
+      setError(createError.message);
     }
   }
 
-  async function handleServeNext() {
-    setServingNext(true);
+  async function serveNext() {
     setError("");
     try {
-      await fetchJson(`${API_BASE}/api/queue/serve-next`, { method: "POST" });
+      await fetchJson(`${API_BASE}/api/queue/serve-next`, {
+        method: "POST",
+        headers: authHeaders(token),
+      });
       await loadDashboard();
     } catch (serveError) {
       setError(serveError.message);
-    } finally {
-      setServingNext(false);
     }
   }
 
-  async function handleStatusChange(id, status) {
+  async function updateStatus(id, status) {
     setError("");
     try {
-      const params = new URLSearchParams({ status });
-      await fetchJson(`${API_BASE}/api/queue/${id}/status?${params}`, {
+      await fetchJson(`${API_BASE}/api/tickets/${id}/status`, {
         method: "PATCH",
+        headers: authHeaders(token),
+        body: JSON.stringify({ status }),
       });
       await loadDashboard();
     } catch (statusError) {
@@ -123,31 +141,87 @@ function App() {
     }
   }
 
-  async function handleDelete(id) {
+  async function bookAppointment(event) {
+    event.preventDefault();
+    setError("");
+
+    try {
+      const start = slotStartUtc
+        ? new Date(slotStartUtc).toISOString()
+        : new Date().toISOString();
+      await fetchJson(`${API_BASE}/api/appointments`, {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({
+          customerName: name || username,
+          slotStartUtc: start,
+          durationMinutes: 20,
+        }),
+      });
+      await loadDashboard();
+    } catch (appointmentError) {
+      setError(appointmentError.message);
+    }
+  }
+
+  async function updateStaff() {
     setError("");
     try {
-      await fetchJson(`${API_BASE}/api/queue/${id}`, { method: "DELETE" });
+      await fetchJson(`${API_BASE}/api/admin/staff-allocation`, {
+        method: "POST",
+        headers: authHeaders(token),
+        body: JSON.stringify({ staffCount }),
+      });
       await loadDashboard();
-    } catch (deleteError) {
-      setError(deleteError.message);
+    } catch (adminError) {
+      setError(adminError.message);
     }
   }
 
   useEffect(() => {
     loadDashboard();
-  }, []);
+  }, [token]);
 
   useEffect(() => {
-    if (!autoRefresh) {
+    if (!token) {
       return;
     }
 
-    const timer = setInterval(() => {
-      loadDashboard();
-    }, 8000);
+    const connection = new signalR.HubConnectionBuilder()
+      .withUrl(`${API_BASE}/hubs/queue`, {
+        accessTokenFactory: () => token,
+      })
+      .withAutomaticReconnect()
+      .build();
 
-    return () => clearInterval(timer);
-  }, [autoRefresh]);
+    connection.on("queue-updated", () => {
+      loadDashboard();
+    });
+
+    connection.start().catch(() => {
+      setError("Live updates disconnected. Manual refresh still works.");
+    });
+
+    return () => {
+      connection.stop();
+    };
+  }, [token]);
+
+  if (!token) {
+    return (
+      <LoginView
+        username={username}
+        password={password}
+        setUsername={setUsername}
+        setPassword={setPassword}
+        login={login}
+        error={error}
+      />
+    );
+  }
+
+  const defaultPath =
+    role === "Admin" ? "/admin" : role === "Staff" ? "/staff" : "/customer";
 
   return (
     <main className="page">
@@ -156,158 +230,123 @@ function App() {
 
       <section className="panel">
         <header className="panel-header">
-          <p className="eyebrow">SmartQueue Control</p>
-          <h1>Live Queue Desk</h1>
+          <p className="eyebrow">Smart Queue {role}</p>
+          <h1>Queue Operations Center</h1>
           <p className="subtitle">
-            Advanced operations for real desk usage: serve next, cancel, monitor
-            load, and search live queue.
+            Predicted wait: {queueState?.predictedWaitMinutes ?? 0} min | Staff:{" "}
+            {queueState?.staffCount ?? 0}
           </p>
         </header>
 
-        <div className="stats" role="status" aria-live="polite">
-          <div>
-            <span>Total tickets</span>
-            <strong>{summary?.total ?? 0}</strong>
-          </div>
-          <div>
-            <span>Waiting now</span>
-            <strong>{summary?.waiting ?? 0}</strong>
-          </div>
-          <div>
-            <span>Served</span>
-            <strong>{summary?.served ?? 0}</strong>
-          </div>
-          <div>
-            <span>Cancelled</span>
-            <strong>{summary?.cancelled ?? 0}</strong>
-          </div>
-          <div>
-            <span>Oldest wait (min)</span>
-            <strong>{summary?.oldestWaitingMinutes ?? 0}</strong>
-          </div>
-          <button
-            className="ghost"
-            onClick={loadDashboard}
-            disabled={loading || submitting}
+        <nav className="role-nav" aria-label="Role views">
+          <NavLink
+            to="/customer"
+            className={({ isActive }) =>
+              `role-link${isActive ? " active" : ""}`
+            }
           >
+            Customer
+          </NavLink>
+          {canManageQueue && (
+            <NavLink
+              to="/staff"
+              className={({ isActive }) =>
+                `role-link${isActive ? " active" : ""}`
+              }
+            >
+              Staff
+            </NavLink>
+          )}
+          {isAdmin && (
+            <NavLink
+              to="/admin"
+              className={({ isActive }) =>
+                `role-link${isActive ? " active" : ""}`
+              }
+            >
+              Admin
+            </NavLink>
+          )}
+          <button className="ghost" onClick={loadDashboard}>
             {loading ? "Refreshing..." : "Refresh"}
           </button>
+        </nav>
+
+        <div className="stats" role="status" aria-live="polite">
+          <div>
+            <span>Total waiting</span>
+            <strong>{queueState?.totalWaiting ?? 0}</strong>
+          </div>
+          <div>
+            <span>Avg service (min)</span>
+            <strong>{queueState?.averageServiceMinutes ?? 0}</strong>
+          </div>
+          <div>
+            <span>Predicted wait</span>
+            <strong>{queueState?.predictedWaitMinutes ?? 0}</strong>
+          </div>
+          {canManageQueue && (
+            <>
+              <div>
+                <span>Served</span>
+                <strong>{summary?.served ?? 0}</strong>
+              </div>
+              <div>
+                <span>Cancelled</span>
+                <strong>{summary?.cancelled ?? 0}</strong>
+              </div>
+            </>
+          )}
         </div>
-
-        <div className="toolbar">
-          <button
-            className="primary"
-            type="button"
-            onClick={handleServeNext}
-            disabled={servingNext || loading || waitingTickets.length === 0}
-          >
-            {servingNext ? "Serving..." : "Serve Next"}
-          </button>
-          <label className="toggle">
-            <input
-              type="checkbox"
-              checked={autoRefresh}
-              onChange={(event) => setAutoRefresh(event.target.checked)}
-            />
-            Auto refresh
-          </label>
-          <input
-            className="search"
-            type="text"
-            value={search}
-            onChange={(event) => setSearch(event.target.value)}
-            placeholder="Search waiting customer"
-          />
-        </div>
-
-        <form className="ticket-form" onSubmit={handleSubmit}>
-          <label>
-            Customer name
-            <input
-              type="text"
-              value={name}
-              onChange={(event) => setName(event.target.value)}
-              placeholder="e.g. Sarah"
-              maxLength={60}
-            />
-          </label>
-
-          <label>
-            Priority
-            <input
-              type="number"
-              min="0"
-              max="10"
-              value={priority}
-              onChange={(event) => setPriority(Number(event.target.value))}
-            />
-          </label>
-
-          <button className="primary" type="submit" disabled={submitting}>
-            {submitting ? "Adding..." : "Add Ticket"}
-          </button>
-        </form>
 
         {error && <p className="error">{error}</p>}
 
-        <h2 className="section-heading">Waiting Queue</h2>
-        <ul className="queue-list">
-          {filteredWaiting.map((ticket, index) => (
-            <li key={ticket.id} className="queue-item">
-              <div>
-                <p className="name">{ticket.customerName}</p>
-                <p className="meta">Status: {ticket.status}</p>
-              </div>
-              <div className="priority-pill">P{ticket.priority}</div>
-              <div className="position">#{index + 1}</div>
-              <div className="actions">
-                <button
-                  className="mini"
-                  type="button"
-                  onClick={() => handleStatusChange(ticket.id, "Served")}
-                >
-                  Serve
-                </button>
-                <button
-                  className="mini danger"
-                  type="button"
-                  onClick={() => handleStatusChange(ticket.id, "Cancelled")}
-                >
-                  Cancel
-                </button>
-              </div>
-            </li>
-          ))}
-
-          {!loading && filteredWaiting.length === 0 && (
-            <li className="empty">
-              No matching waiting tickets. Add one or clear search.
-            </li>
+        <Routes>
+          <Route
+            path="/customer"
+            element={
+              <CustomerDashboard
+                name={name}
+                setName={setName}
+                priority={priority}
+                setPriority={setPriority}
+                slotStartUtc={slotStartUtc}
+                setSlotStartUtc={setSlotStartUtc}
+                createTicket={createTicket}
+                bookAppointment={bookAppointment}
+              />
+            }
+          />
+          {canManageQueue && (
+            <Route
+              path="/staff"
+              element={
+                <StaffLiveQueue
+                  waitingTickets={waitingTickets}
+                  updateStatus={updateStatus}
+                  serveNext={serveNext}
+                  loading={loading}
+                />
+              }
+            />
           )}
-        </ul>
-
-        <h2 className="section-heading">History</h2>
-        <ul className="queue-list history">
-          {historyTickets.map((ticket) => (
-            <li key={ticket.id} className="queue-item compact">
-              <div>
-                <p className="name">{ticket.customerName}</p>
-                <p className="meta">Status: {ticket.status}</p>
-              </div>
-              <div className="priority-pill">P{ticket.priority}</div>
-              <button
-                className="mini ghost-danger"
-                type="button"
-                onClick={() => handleDelete(ticket.id)}
-              >
-                Remove
-              </button>
-            </li>
-          ))}
-          {!loading && historyTickets.length === 0 && (
-            <li className="empty">No served or cancelled tickets yet.</li>
+          {isAdmin && (
+            <Route
+              path="/admin"
+              element={
+                <AdminAnalyticsPanel
+                  staffCount={staffCount}
+                  setStaffCount={setStaffCount}
+                  updateStaff={updateStaff}
+                  analytics={analytics}
+                  appointments={appointments}
+                  loading={loading}
+                />
+              }
+            />
           )}
-        </ul>
+          <Route path="*" element={<Navigate to={defaultPath} replace />} />
+        </Routes>
       </section>
     </main>
   );

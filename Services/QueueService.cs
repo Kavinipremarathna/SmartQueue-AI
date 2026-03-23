@@ -1,139 +1,166 @@
-using SmartQueueAPI.Data;
-using SmartQueueAPI.Models;
-using Microsoft.EntityFrameworkCore;
+using SmartQueueAPI.DTOs.Queue;
+using SmartQueueAPI.DTOs.Tickets;
+using SmartQueueAPI.Entities;
+using SmartQueueAPI.Repositories;
+using SmartQueueAPI.Services.Interfaces;
 
-namespace SmartQueueAPI.Services
+namespace SmartQueueAPI.Services;
+
+public class QueueService : IQueueService
 {
-    public record QueueSummary(
-        int Total,
-        int Waiting,
-        int Served,
-        int Cancelled,
-        int AverageWaitingPriority,
-        int OldestWaitingMinutes);
+    private readonly ITicketRepository _ticketRepository;
+    private readonly IQueueConfigurationRepository _configurationRepository;
+    private readonly IQueueNotifier _queueNotifier;
 
-    public class QueueService
+    public QueueService(
+        ITicketRepository ticketRepository,
+        IQueueConfigurationRepository configurationRepository,
+        IQueueNotifier queueNotifier)
     {
-        private readonly AppDbContext _context;
+        _ticketRepository = ticketRepository;
+        _configurationRepository = configurationRepository;
+        _queueNotifier = queueNotifier;
+    }
 
-        public QueueService(AppDbContext context)
+    public async Task<TicketResponseDto> CreateTicketAsync(CreateTicketRequestDto request)
+    {
+        var ticket = new Ticket
         {
-            _context = context;
+            CustomerName = request.CustomerName.Trim(),
+            Priority = Math.Clamp(request.Priority, 0, 10),
+            Status = TicketStatus.Waiting
+        };
+
+        var waitingCount = (await _ticketRepository.GetWaitingAsync()).Count;
+        var config = await _configurationRepository.GetOrCreateAsync();
+        ticket.EstimatedWaitMinutes = PredictWait(waitingCount + 1, config.AverageServiceMinutes, config.StaffCount);
+
+        var saved = await _ticketRepository.AddAsync(ticket);
+        await _queueNotifier.BroadcastQueueUpdatedAsync();
+
+        return Map(saved);
+    }
+
+    public async Task<QueueCurrentResponseDto> GetCurrentQueueAsync()
+    {
+        var waiting = await _ticketRepository.GetWaitingAsync();
+        var config = await _configurationRepository.GetOrCreateAsync();
+        var predicted = PredictWait(waiting.Count, config.AverageServiceMinutes, config.StaffCount);
+
+        return new QueueCurrentResponseDto(
+            waiting.Select(Map).ToList(),
+            waiting.Count,
+            config.StaffCount,
+            config.AverageServiceMinutes,
+            predicted);
+    }
+
+    public async Task<IReadOnlyList<TicketResponseDto>> GetAllTicketsAsync()
+    {
+        var tickets = await _ticketRepository.GetAllAsync();
+        return tickets.Select(Map).ToList();
+    }
+
+    public async Task<TicketResponseDto?> ServeNextAsync()
+    {
+        var waiting = await _ticketRepository.GetWaitingAsync();
+        var next = waiting.FirstOrDefault();
+        if (next is null)
+        {
+            return null;
         }
 
-        public async Task<Ticket> AddTicket(string name, int priority)
-        {
-            var ticket = new Ticket
-            {
-                CustomerName = name.Trim(),
-                Priority = Math.Clamp(priority, 0, 10)
-            };
+        next.Status = TicketStatus.Served;
+        next.ServedAtUtc = DateTime.UtcNow;
+        await _ticketRepository.SaveChangesAsync();
+        await _queueNotifier.BroadcastQueueUpdatedAsync();
 
-            _context.Tickets.Add(ticket);
-            await _context.SaveChangesAsync();
-            return ticket;
+        return Map(next);
+    }
+
+    public async Task<TicketResponseDto?> UpdateStatusAsync(int ticketId, string status)
+    {
+        var normalized = NormalizeStatus(status);
+        if (normalized is null)
+        {
+            return null;
         }
 
-        public async Task<List<Ticket>> GetQueue()
+        var ticket = await _ticketRepository.GetByIdAsync(ticketId);
+        if (ticket is null)
         {
-            return await _context.Tickets
-                .Where(t => t.Status == "Waiting")
-                .OrderByDescending(t => t.Priority)
-                .ThenBy(t => t.CreatedAt)
-                .ToListAsync();
+            return null;
         }
 
-        public async Task<List<Ticket>> GetAllTickets()
+        ticket.Status = normalized;
+        ticket.ServedAtUtc = normalized == TicketStatus.Served ? DateTime.UtcNow : null;
+        await _ticketRepository.SaveChangesAsync();
+        await _queueNotifier.BroadcastQueueUpdatedAsync();
+
+        return Map(ticket);
+    }
+
+    public async Task<bool> DeleteTicketAsync(int ticketId)
+    {
+        var ticket = await _ticketRepository.GetByIdAsync(ticketId);
+        if (ticket is null)
         {
-            return await _context.Tickets
-                .OrderBy(t => t.Status == "Waiting" ? 0 : t.Status == "Served" ? 1 : 2)
-                .ThenByDescending(t => t.Priority)
-                .ThenBy(t => t.CreatedAt)
-                .ToListAsync();
+            return false;
         }
 
-        public async Task<Ticket?> ServeNextTicket()
+        await _ticketRepository.DeleteAsync(ticket);
+        await _ticketRepository.SaveChangesAsync();
+        await _queueNotifier.BroadcastQueueUpdatedAsync();
+        return true;
+    }
+
+    public async Task<QueueSummaryResponseDto> GetSummaryAsync()
+    {
+        var tickets = await _ticketRepository.GetAllAsync();
+        var waiting = tickets.Where(t => t.Status == TicketStatus.Waiting).ToList();
+
+        var avgPriority = waiting.Count == 0 ? 0 : (int)Math.Round(waiting.Average(t => t.Priority));
+        var oldestMinutes = waiting.Count == 0
+            ? 0
+            : (int)Math.Round((DateTime.UtcNow - waiting.Min(t => t.CreatedAtUtc)).TotalMinutes);
+
+        return new QueueSummaryResponseDto(
+            tickets.Count,
+            waiting.Count,
+            tickets.Count(t => t.Status == TicketStatus.Served),
+            tickets.Count(t => t.Status == TicketStatus.Cancelled),
+            avgPriority,
+            oldestMinutes);
+    }
+
+    private static TicketResponseDto Map(Ticket ticket)
+    {
+        return new TicketResponseDto(
+            ticket.Id,
+            ticket.CustomerName,
+            ticket.Status,
+            ticket.Priority,
+            ticket.EstimatedWaitMinutes,
+            ticket.CreatedAtUtc,
+            ticket.ServedAtUtc,
+            ticket.AppointmentId);
+    }
+
+    private static int PredictWait(int queueLength, int averageServiceMinutes, int staffCount)
+    {
+        var safeStaffCount = Math.Max(1, staffCount);
+        return (int)Math.Ceiling((double)(queueLength * averageServiceMinutes) / safeStaffCount);
+    }
+
+    private static string? NormalizeStatus(string status)
+    {
+        var normalized = status.Trim().ToLowerInvariant();
+        return normalized switch
         {
-            var next = await _context.Tickets
-                .Where(t => t.Status == "Waiting")
-                .OrderByDescending(t => t.Priority)
-                .ThenBy(t => t.CreatedAt)
-                .FirstOrDefaultAsync();
-
-            if (next is null)
-            {
-                return null;
-            }
-
-            next.Status = "Served";
-            await _context.SaveChangesAsync();
-            return next;
-        }
-
-        public async Task<Ticket?> UpdateTicketStatus(int id, string status)
-        {
-            var normalized = NormalizeStatus(status);
-            if (normalized is null)
-            {
-                return null;
-            }
-
-            var ticket = await _context.Tickets.FindAsync(id);
-            if (ticket is null)
-            {
-                return null;
-            }
-
-            ticket.Status = normalized;
-            await _context.SaveChangesAsync();
-            return ticket;
-        }
-
-        public async Task<bool> DeleteTicket(int id)
-        {
-            var ticket = await _context.Tickets.FindAsync(id);
-            if (ticket is null)
-            {
-                return false;
-            }
-
-            _context.Tickets.Remove(ticket);
-            await _context.SaveChangesAsync();
-            return true;
-        }
-
-        public async Task<QueueSummary> GetSummary()
-        {
-            var tickets = await _context.Tickets.ToListAsync();
-            var waiting = tickets.Where(t => t.Status == "Waiting").ToList();
-
-            var avgPriority = waiting.Count == 0
-                ? 0
-                : (int)Math.Round(waiting.Average(t => t.Priority));
-
-            var oldestMinutes = waiting.Count == 0
-                ? 0
-                : (int)Math.Round((DateTime.Now - waiting.Min(t => t.CreatedAt)).TotalMinutes);
-
-            return new QueueSummary(
-                tickets.Count,
-                waiting.Count,
-                tickets.Count(t => t.Status == "Served"),
-                tickets.Count(t => t.Status == "Cancelled"),
-                avgPriority,
-                oldestMinutes);
-        }
-
-        private static string? NormalizeStatus(string status)
-        {
-            var value = status.Trim().ToLowerInvariant();
-            return value switch
-            {
-                "waiting" => "Waiting",
-                "served" => "Served",
-                "cancelled" => "Cancelled",
-                _ => null
-            };
-        }
+            "waiting" => TicketStatus.Waiting,
+            "served" => TicketStatus.Served,
+            "cancelled" => TicketStatus.Cancelled,
+            _ => null
+        };
     }
 }
