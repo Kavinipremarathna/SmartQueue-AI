@@ -1,0 +1,17 @@
+# Build artifacts
+bin/
+obj/
+
+# Database files
+*.db
+*.db-shm
+*.db-wal
+
+# Frontend artifacts
+frontend/node_modules/
+frontend/dist/
+
+# IDE files
+.vscode/
+*.user
+*.suo
