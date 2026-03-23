@@ -26,13 +26,30 @@ builder.Services.Configure<JwtOptions>(builder.Configuration.GetSection(JwtOptio
 builder.Services.AddControllers();
 builder.Services.AddCors(options =>
 {
+    var configuredOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>()
+        ?? Array.Empty<string>();
+
     options.AddPolicy("frontend", policy =>
-        policy.WithOrigins(
-                "http://localhost:5173",
-                "http://localhost:5174")
-              .AllowAnyHeader()
+    {
+        policy.AllowAnyHeader()
               .AllowAnyMethod()
-              .AllowCredentials());
+              .AllowCredentials()
+              .SetIsOriginAllowed(origin =>
+              {
+                  if (!Uri.TryCreate(origin, UriKind.Absolute, out var uri))
+                  {
+                      return false;
+                  }
+
+                  if (uri.Host.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+                      uri.Host.Equals("127.0.0.1"))
+                  {
+                      return true;
+                  }
+
+                  return configuredOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase);
+              });
+    });
 });
 
 var jwtOptions = builder.Configuration.GetSection(JwtOptions.SectionName).Get<JwtOptions>()

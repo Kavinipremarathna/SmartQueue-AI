@@ -8,7 +8,7 @@ export default function LoginView({
 }) {
   return (
     <main className="page">
-      <section className="panel">
+      <section className="panel login-panel">
         <header className="panel-header">
           <p className="eyebrow">SmartQueue Login</p>
           <h1>JWT Access</h1>
@@ -17,7 +17,7 @@ export default function LoginView({
           </p>
         </header>
 
-        <form className="ticket-form" onSubmit={login}>
+        <form className="login-form" onSubmit={login}>
           <label>
             Username
             <input

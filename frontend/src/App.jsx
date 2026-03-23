@@ -2,12 +2,14 @@ import { useEffect, useMemo, useState } from "react";
 import * as signalR from "@microsoft/signalr";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import { API_BASE, authHeaders, fetchJson } from "./api/client";
+import IntroScreen from "./components/IntroScreen";
 import LoginView from "./components/LoginView";
 import CustomerDashboard from "./views/CustomerDashboard";
 import StaffLiveQueue from "./views/StaffLiveQueue";
 import AdminAnalyticsPanel from "./views/AdminAnalyticsPanel";
 
 function App() {
+  const [showIntro, setShowIntro] = useState(true);
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin123");
   const [token, setToken] = useState("");
@@ -178,6 +180,13 @@ function App() {
     }
   }
 
+  function logout() {
+    setToken("");
+    setRole("");
+    setError("");
+    setShowIntro(true);
+  }
+
   useEffect(() => {
     loadDashboard();
   }, [token]);
@@ -206,6 +215,10 @@ function App() {
       connection.stop();
     };
   }, [token]);
+
+  if (showIntro) {
+    return <IntroScreen onReady={() => setShowIntro(false)} />;
+  }
 
   if (!token) {
     return (
@@ -269,6 +282,9 @@ function App() {
           )}
           <button className="ghost" onClick={loadDashboard}>
             {loading ? "Refreshing..." : "Refresh"}
+          </button>
+          <button className="ghost" type="button" onClick={logout}>
+            Logout
           </button>
         </nav>
 
