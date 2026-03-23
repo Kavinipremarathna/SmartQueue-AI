@@ -16,14 +16,24 @@ SmartQueue is a queue management web application with an ASP.NET Core backend an
 - Frontend: React + Vite
 - Tests: xUnit
 
+## Architecture
+
+The application follows a **3-layer architecture** for clean separation of concerns:
+
+1. **Controllers Layer** - HTTP endpoints, request validation
+2. **Services Layer** - Business logic, queue operations
+3. **Data Layer** - Database access, EF Core mapping
+
+The React frontend communicates with the backend API via HTTP REST calls.
+
 ## Project Structure
 
 - `Program.cs`: app startup, DI, CORS, DB initialization
 - `Controllers/QueueController.cs`: queue API endpoints
 - `Services/QueueService.cs`: business logic
 - `Data/AppDbContext.cs`: EF Core context
-- `frontend/`: React app
-- `tests/SmartQueueAPI.Tests/`: backend tests
+- `frontend/`: React app with dashboard UI
+- `tests/SmartQueueAPI.Tests/`: backend unit tests
 
 ## Run Locally
 
