@@ -121,21 +121,72 @@ Upgraded development schema file:
 
 These are created automatically on startup.
 
-## Docker
+## Docker Deployment
 
-Use Docker Compose to run both services:
+### Prerequisites
+
+- Install [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- Verify installation: `docker --version && docker-compose --version`
+
+### Run with Docker Compose
 
 ```bash
-docker compose up --build
+# Start all services (PostgreSQL, Backend, Frontend)
+docker-compose up -d --build
+
+# Verify services are running
+docker-compose ps
+
+# Stop all services
+docker-compose down
+
+# Stop and remove database (fresh start)
+docker-compose down -v
 ```
 
-- Frontend: `http://localhost:5173`
-- Backend: `http://localhost:5055`
+### Access Services
 
-Docker Compose now runs PostgreSQL by default for the backend service.
+- **Frontend**: http://localhost:5173
+- **Backend API**: http://localhost:5055
+- **PostgreSQL**: localhost:5432 (internal, user: `smartqueue`, password: `smartqueue`)
 
-- Postgres: `localhost:5432` (`smartqueue`/`smartqueue`)
-- Backend provider in compose: `Database__Provider=Postgres`
+### Services
+
+1. **PostgreSQL 17 Alpine** - Production database
+   - Accessible at `postgres:5432` (internal container network)
+   - Credentials: user=`smartqueue`, password=`smartqueue`, db=`smartqueue`
+   - Data persists in `postgres-data` volume
+
+2. **Backend (.NET 10)**
+   - Uses PostgreSQL via `Database__Provider=Postgres`
+   - Connection: `Host=postgres;Port=5432;Database=smartqueue;Username=smartqueue;Password=smartqueue`
+   - Seeded with demo users on startup
+
+3. **Frontend (React 19 + Vite)**
+   - Served on port 5173
+   - Connects to backend at `http://localhost:5055`
+
+### Docker Logs
+
+```bash
+# View all service logs
+docker-compose logs -f
+
+# View specific service
+docker-compose logs -f backend
+docker-compose logs -f frontend
+docker-compose logs -f postgres
+```
+
+### Troubleshooting
+
+| Issue                        | Solution                                                     |
+| ---------------------------- | ------------------------------------------------------------ |
+| Port 5173 already in use     | Change `frontend` port in `docker-compose.yml`               |
+| Port 5055 already in use     | Change `backend` port in `docker-compose.yml`                |
+| Database connection fails    | Check backend logs: `docker-compose logs backend`            |
+| Frontend can't reach backend | CORS is configured for `localhost` origins                   |
+| Fresh start needed           | Run `docker-compose down -v && docker-compose up -d --build` |
 
 ## CI
 
@@ -145,7 +196,33 @@ GitHub Actions workflow in `.github/workflows/ci.yml` runs:
 - backend auth + queue smoke test
 - frontend install/build
 
+## Modern UX Features
+
+### Animated Entry Screen
+
+- **Intro Screen** with flowing SVG curves and animated orbs
+- "Are you ready?" text with staggered entrance animation
+- Smooth fade transition to login form
+- Responsive design for mobile & desktop
+
+### Interactive Components
+
+- Form inputs with focus glow effects
+- Buttons with hover lift animation
+- Staggered animations for form elements
+- Error messages with styled backgrounds
+- Real-time queue updates via SignalR
+
+### Tech Stack for UI
+
+- React 19 with Vite 8.0.1 for fast bundling
+- CSS3 animations with cubic-bezier easing
+- Vector graphics (SVG curves) for smooth animations
+- React Router DOM 7.2.0 for role-based navigation
+
 ## Notes
 
-- CORS allows local frontend origins `http://localhost:5173` and `http://localhost:5174`.
+- CORS allows local frontend origins `http://localhost:5173` and `http://localhost:5174`
+- Demo data is seeded automatically on app startup
+- All APIs require JWT bearer token authentication (except POST /api/auth/login)
 - SQLite files are ignored by git.
