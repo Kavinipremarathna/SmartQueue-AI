@@ -92,7 +92,8 @@ cd frontend && npm run build
 
 Base: `http://localhost:5055/api`
 
-- `POST /auth/login` -> get JWT token
+- `POST /auth/token` -> get JWT token (modern)
+- `POST /auth/login` -> legacy alias for compatibility
 - `GET /queue/current` -> live queue with predicted wait
 - `GET /queue/summary` -> queue summary (Admin/Staff)
 - `POST /queue/serve-next` -> serve top waiting ticket (Admin/Staff)
@@ -224,5 +225,5 @@ GitHub Actions workflow in `.github/workflows/ci.yml` runs:
 
 - CORS allows local frontend origins `http://localhost:5173` and `http://localhost:5174`
 - Demo data is seeded automatically on app startup
-- All APIs require JWT bearer token authentication (except POST /api/auth/login)
+- All APIs require JWT bearer token authentication (except POST /api/auth/token; legacy POST /api/auth/login is still supported)
 - SQLite files are ignored by git.

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import * as signalR from "@microsoft/signalr";
 import { NavLink, Navigate, Route, Routes } from "react-router-dom";
-import { API_BASE, authHeaders, fetchJson } from "./api/client";
+import { API_BASE, AUTH_ENDPOINTS, authHeaders, fetchJson } from "./api/client";
 import IntroScreen from "./components/IntroScreen";
 import LoginView from "./components/LoginView";
 import CustomerDashboard from "./views/CustomerDashboard";
@@ -39,7 +39,7 @@ function App() {
     setError("");
 
     try {
-      const response = await fetchJson(`${API_BASE}/api/auth/login`, {
+      const response = await fetchJson(`${API_BASE}${AUTH_ENDPOINTS.token}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ username, password }),
@@ -280,7 +280,7 @@ function App() {
               Admin
             </NavLink>
           )}
-          <button className="ghost" onClick={loadDashboard}>
+          <button className="ghost refresh-btn" onClick={loadDashboard}>
             {loading ? "Refreshing..." : "Refresh"}
           </button>
           <button className="ghost" type="button" onClick={logout}>

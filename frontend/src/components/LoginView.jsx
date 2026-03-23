@@ -21,6 +21,7 @@ export default function LoginView({
           <label>
             Username
             <input
+              placeholder="Enter your username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
             />
@@ -29,12 +30,13 @@ export default function LoginView({
             Password
             <input
               type="password"
+              placeholder="Enter your password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
             />
           </label>
-          <button className="primary" type="submit">
-            Login
+          <button className="primary login-submit" type="submit">
+            Sign in
           </button>
         </form>
         {error && <p className="error">{error}</p>}

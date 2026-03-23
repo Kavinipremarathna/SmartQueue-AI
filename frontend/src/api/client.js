@@ -1,6 +1,10 @@
 export const API_BASE =
   import.meta.env.VITE_API_BASE_URL ?? "http://localhost:5055";
 
+export const AUTH_ENDPOINTS = {
+  token: "/api/auth/token",
+};
+
 export async function fetchJson(url, options = {}) {
   const response = await fetch(url, options);
   if (!response.ok) {
